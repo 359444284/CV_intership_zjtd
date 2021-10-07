@@ -8,7 +8,9 @@ def train_epoch(
         scheduler,
         device,
         loss_fn,
+        train_examples,
         train_dataloader,
+        val_examples=0,
         val_dataloader=None,
         epochs=10
 ):
@@ -21,10 +23,13 @@ def train_epoch(
     print("-" * 60)
 
     for epoch_i in range(epochs):
-        total_loss = 0
+        total_loss = []
+        correct_predictions = 0
         model = model.train()
 
         for step, batch in enumerate(train_dataloader):
+            if step%500 == 499:
+                print(np.mean(total_loss))
 
             image, label = batch
             image = image.to(device)
@@ -32,35 +37,40 @@ def train_epoch(
 
 
             output = model(image)
+
+            _, preds = torch.max(output, dim=1)
+            correct_predictions += torch.sum(preds == label).cpu()
+
             loss = loss_fn(output, label)
-            total_loss += loss.item()
+            total_loss.append(loss.item())
+
 
             loss.backward()
             # nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
         scheduler.step()
-        avg_train_loss = total_loss / len(train_dataloader)
-
+        avg_train_loss = np.mean(total_loss)
+        train_acc = correct_predictions.double() / train_examples
         # evaluation
 
         if val_dataloader is not None:
-            val_loss, top1, top5 = evaluate(model, val_dataloader, device, loss_fn)
+            val_loss, val_acc = evaluate(model, val_examples, val_dataloader, device, loss_fn)
 
             # Track the best accuracy
-            if top1 > best_accuracy:
-                best_accuracy = top1
-                # torch.save(model.state_dict(), 'best_model_state.bin')
+            if val_acc > best_accuracy:
+                best_accuracy = val_acc
+                torch.save(model.state_dict(), 'best.bin')
                 # Print performance over the entire training data
                 # time_elapsed = time.time() - t0_epoch
-            print([epoch_i + 1, avg_train_loss,val_loss, top1])
+            print([epoch_i + 1, avg_train_loss, train_acc,val_loss, val_acc])
 
         print("\n")
         # print(f"Training complete! Best accuracy: {best_accuracy:.2f}%.")
         print(best_accuracy)
 
 
-def evaluate(model, val_dataloader, device, loss_fn):
+def evaluate(model, val_examples, val_dataloader, device, loss_fn):
     """After the completion of each training epoch, measure the model's
     performance on our validation set.
     """
@@ -69,7 +79,7 @@ def evaluate(model, val_dataloader, device, loss_fn):
     model.eval()
 
     # Tracking variables
-    tp_1, tp_5, counter = 0, 0, 0
+    correct_predictions = 0
     val_loss = []
     # For each batch in our validation set...
     with torch.no_grad():
@@ -83,16 +93,13 @@ def evaluate(model, val_dataloader, device, loss_fn):
             loss = loss_fn(output, label)
             val_loss.append(loss.item())
 
-            _, pred = torch.topk(output, 5, dim=1)
+            _, preds = torch.max(output, dim=1)
+            correct_predictions += torch.sum(preds == label).cpu()
 
-            correct = pred.eq(label.view(-1, 1).expand_as(pred)).cpu().numpy()
-            counter += 1
-            tp_1 += correct[:, 0].sum()
-            tp_5 += correct.sum()
 
 
 
             # Get the predictions
     val_loss = np.mean(val_loss)
 
-    return val_loss, tp_1 / counter, tp_5 / counter
+    return val_loss, correct_predictions / val_examples
